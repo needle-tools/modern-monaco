@@ -7,25 +7,29 @@ export function resolveNeedlePropertyTypeInfo(ts2, languageService, fileName, po
   if (!node) return null;
   const symbol = checker.getSymbolAtLocation(node);
   const type = checker.getTypeAtLocation(node);
-  if (checker.typeToString(type) === "any") return null;
   const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+  const checkedTypeText = checker.typeToString(type);
+  const declaredTypeText = declaration && "type" in declaration ? declaration.type?.getText() : void 0;
+  const typeText = checkedTypeText === "any" && declaredTypeText && declaredTypeText !== "any" ? declaredTypeText : checkedTypeText;
+  if (typeText === "any") return null;
   const tags = symbol?.getJsDocTags(checker) ?? [];
   return {
     packageName: metadata.packageName,
     packageVersion: metadata.packageVersion,
     moduleName: metadata.moduleName,
-    ownerType: declaration ? getNeedleOwningTypeName(ts2, declaration) : metadata.typeName,
+    ownerType: declaration ? getNeedleOwningTypeName(ts2, declaration) || metadata.typeName : metadata.typeName,
     name: metadata.propertyName ?? node.getText(sourceFile),
-    type: checker.typeToString(type),
+    type: typeText,
     readonly: declaration ? hasNeedleReadonlyModifier(ts2, declaration) : void 0,
     optional: !!declaration && "questionToken" in declaration && !!declaration.questionToken,
     description: symbol ? ts2.displayPartsToString(symbol.getDocumentationComment(checker)) || void 0 : void 0,
     defaultValue: getNeedleDefaultValue(tags),
     sourceUrl: declaration?.getSourceFile().fileName,
     enumOptions: getNeedleLiteralEnumOptions(ts2, checker, type, program, declaration),
-    container: getNeedleContainerTypeInfo(ts2, checker, type),
+    container: getNeedleContainerTypeInfo(ts2, checker, type, program),
     constructor: getNeedleConstructorTypeInfo(ts2, checker, type),
-    objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, type)
+    constructorOptions: getNeedleConstructorTypeOptions(ts2, checker, type),
+    objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, type, program)
   };
 }
 function findNeedleIdentifierAtPosition(ts2, sourceFile, position) {
@@ -72,12 +76,8 @@ function getNeedleLiteralEnumOptions(ts2, checker, type, program, declaration) {
 }
 function getNeedleLiteralEnumOptionsFromDeclaration(ts2, checker, declaration) {
   const typeNode = declaration && "type" in declaration ? declaration.type : void 0;
-  if (!typeNode || !ts2.isTypeReferenceNode(typeNode)) return void 0;
-  const symbol = checker.getSymbolAtLocation(typeNode.typeName);
-  const target = symbol && (symbol.flags & ts2.SymbolFlags.Alias) !== 0 ? checker.getAliasedSymbol(symbol) : symbol;
-  const aliasDeclaration = target?.declarations?.find(ts2.isTypeAliasDeclaration);
-  if (!aliasDeclaration) return void 0;
-  const options = getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, aliasDeclaration.type);
+  if (!typeNode) return void 0;
+  const options = getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, typeNode);
   return options.length > 0 ? options : void 0;
 }
 function getNeedleLiteralEnumOptionsFromAliasDeclaration(ts2, checker, type) {
@@ -119,6 +119,15 @@ function getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, typeNode, seen = 
     const target = symbol && (symbol.flags & ts2.SymbolFlags.Alias) !== 0 ? checker.getAliasedSymbol(symbol) : symbol;
     const options = [];
     for (const declaration of target?.declarations ?? []) {
+      if (ts2.isEnumDeclaration(declaration)) {
+        options.push(...declaration.members.map((member) => {
+          const value = checker.getConstantValue(member);
+          if (typeof value !== "string" && typeof value !== "number") return void 0;
+          const label = ts2.isIdentifier(member.name) || ts2.isStringLiteral(member.name) || ts2.isNumericLiteral(member.name) ? member.name.text : member.name.getText();
+          return { label, value };
+        }).filter(Boolean));
+        continue;
+      }
       if (!ts2.isTypeAliasDeclaration(declaration)) continue;
       const key = `${declaration.getSourceFile().fileName}:${declaration.pos}`;
       if (seen.has(key)) continue;
@@ -153,7 +162,7 @@ function getNeedleLiteralTypeValue(type) {
   const value = type.value;
   return typeof value === "string" || typeof value === "number" ? value : void 0;
 }
-function getNeedleContainerTypeInfo(ts2, checker, type) {
+function getNeedleContainerTypeInfo(ts2, checker, type, program, depth = 0, seen = /* @__PURE__ */ new Set()) {
   const normalizedType = getNeedleNonNullishType(ts2, type);
   const typeArguments = checker.getTypeArguments(normalizedType);
   if (checker.isArrayType(normalizedType) || checker.isTupleType(normalizedType)) {
@@ -164,7 +173,7 @@ function getNeedleContainerTypeInfo(ts2, checker, type) {
       elementType: checker.typeToString(elementType),
       elementTypeName: getNeedleTypeName(elementType),
       elementConstructor: getNeedleConstructorTypeInfo(ts2, checker, elementType),
-      elementMembers: getNeedleObjectMemberTypeInfo(ts2, checker, elementType)
+      elementMembers: getNeedleObjectMemberTypeInfo(ts2, checker, elementType, program, depth + 1, seen)
     };
   }
   const symbolName = getNeedleTypeSymbolName(normalizedType);
@@ -175,7 +184,7 @@ function getNeedleContainerTypeInfo(ts2, checker, type) {
       elementType: checker.typeToString(elementType),
       elementTypeName: getNeedleTypeName(elementType),
       elementConstructor: getNeedleConstructorTypeInfo(ts2, checker, elementType),
-      elementMembers: getNeedleObjectMemberTypeInfo(ts2, checker, elementType)
+      elementMembers: getNeedleObjectMemberTypeInfo(ts2, checker, elementType, program, depth + 1, seen)
     };
   }
   if ((symbolName === "Map" || symbolName === "ReadonlyMap") && typeArguments[1]) {
@@ -186,7 +195,7 @@ function getNeedleContainerTypeInfo(ts2, checker, type) {
       valueType: checker.typeToString(valueType),
       valueTypeName: getNeedleTypeName(valueType),
       valueConstructor: getNeedleConstructorTypeInfo(ts2, checker, valueType),
-      valueMembers: getNeedleObjectMemberTypeInfo(ts2, checker, valueType)
+      valueMembers: getNeedleObjectMemberTypeInfo(ts2, checker, valueType, program, depth + 1, seen)
     };
   }
   const stringIndexType = normalizedType.getStringIndexType();
@@ -197,47 +206,85 @@ function getNeedleContainerTypeInfo(ts2, checker, type) {
       valueType: checker.typeToString(stringIndexType),
       valueTypeName: getNeedleTypeName(stringIndexType),
       valueConstructor: getNeedleConstructorTypeInfo(ts2, checker, stringIndexType),
-      valueMembers: getNeedleObjectMemberTypeInfo(ts2, checker, stringIndexType)
+      valueMembers: getNeedleObjectMemberTypeInfo(ts2, checker, stringIndexType, program, depth + 1, seen)
     };
   }
   return void 0;
 }
-function getNeedleObjectMemberTypeInfo(ts2, checker, type, depth = 0) {
-  if (depth > 4) return void 0;
+function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, seen = /* @__PURE__ */ new Set()) {
+  if (depth > 6) return void 0;
   const normalizedType = getNeedleNonNullishType(ts2, type);
   if ((normalizedType.getFlags() & ts2.TypeFlags.Object) === 0) return void 0;
   if (checker.isArrayType(normalizedType) || checker.isTupleType(normalizedType)) return void 0;
   const symbolName = getNeedleTypeSymbolName(normalizedType);
   if (symbolName === "Map" || symbolName === "ReadonlyMap" || symbolName === "Set" || symbolName === "ReadonlySet") return void 0;
   if (normalizedType.getStringIndexType()) return void 0;
+  if (isNeedleDefaultLibraryType(normalizedType)) return void 0;
+  const typeKey = checker.typeToString(normalizedType);
+  if (seen.has(typeKey)) return void 0;
+  const branchSeen = new Set(seen);
+  branchSeen.add(typeKey);
   const symbols = checker.getPropertiesOfType(normalizedType).filter((symbol) => {
     const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
     const parent = declaration?.parent;
-    return !!parent && (ts2.isTypeLiteralNode(parent) || ts2.isInterfaceDeclaration(parent));
+    return !!declaration && !!parent
+      && (ts2.isPropertyDeclaration(declaration) || ts2.isPropertySignature(declaration))
+      && !(ts2.canHaveModifiers(declaration) && ts2.getModifiers(declaration)?.some((modifier) => modifier.kind === ts2.SyntaxKind.PrivateKeyword || modifier.kind === ts2.SyntaxKind.ProtectedKeyword))
+      && (ts2.isTypeLiteralNode(parent) || ts2.isInterfaceDeclaration(parent) || ts2.isClassDeclaration(parent));
   });
   if (symbols.length <= 0) return void 0;
   const members = symbols.map((symbol) => {
     const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
     if (!declaration) return void 0;
-    const memberType = getNeedleNonNullishType(ts2, checker.getTypeOfSymbolAtLocation(symbol, declaration));
+    const declaredMemberType = checker.getTypeOfSymbolAtLocation(symbol, declaration);
+    const memberType = getNeedleNonNullishType(ts2, declaredMemberType);
     const name = symbol.getName();
     if (!name || name === "__type") return void 0;
+    const optional = (symbol.flags & ts2.SymbolFlags.Optional) !== 0;
+    const checkedTypeText = checker.typeToString(declaredMemberType);
+    const declaredTypeText = "type" in declaration ? declaration.type?.getText() : void 0;
+    const typeText = checkedTypeText === "any" && declaredTypeText && declaredTypeText !== "any" ? declaredTypeText : checkedTypeText;
     return {
       name,
-      type: checker.typeToString(memberType),
+      type: typeText,
       readonly: hasNeedleReadonlyModifier(ts2, declaration),
-      optional: (symbol.flags & ts2.SymbolFlags.Optional) !== 0,
+      optional,
+      omitWhenOptional: optional,
+      description: ts2.displayPartsToString(symbol.getDocumentationComment(checker)) || void 0,
+      enumOptions: getNeedleLiteralEnumOptions(ts2, checker, memberType, program, declaration),
+      container: getNeedleContainerTypeInfo(ts2, checker, memberType, program, depth + 1, branchSeen),
       constructor: getNeedleConstructorTypeInfo(ts2, checker, memberType),
-      objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, memberType, depth + 1)
+      constructorOptions: getNeedleConstructorTypeOptions(ts2, checker, memberType),
+      objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, memberType, program, depth + 1, branchSeen)
     };
   }).filter(Boolean);
   return members.length > 0 ? members : void 0;
 }
+function isNeedleDefaultLibraryType(type) {
+  const symbol = type.getSymbol() ?? type.aliasSymbol;
+  const declarations = symbol?.declarations ?? [];
+  return declarations.length > 0 && declarations.every((declaration) => {
+    const sourceFile = declaration.getSourceFile();
+    return sourceFile.hasNoDefaultLib || /\/typescript\/lib\/lib\.[^/]+\.d\.ts$/.test(sourceFile.fileName.replace(/\\/g, "/"));
+  });
+}
 function getNeedleConstructorTypeInfo(ts2, checker, type) {
-  const normalizedType = getNeedleNonNullishType(ts2, type);
-  const typeName = getNeedleTypeName(normalizedType);
+  const options = getNeedleConstructorTypes(ts2, checker, type);
+  return options.length === 1 ? options[0] : void 0;
+}
+function getNeedleConstructorTypeOptions(ts2, checker, type) {
+  const options = getNeedleConstructorTypes(ts2, checker, type);
+  return options.length > 1 ? options : void 0;
+}
+function getNeedleConstructorTypes(ts2, checker, type) {
+  const types = type.isUnion() ? type.types.filter((part) => (part.flags & (ts2.TypeFlags.Null | ts2.TypeFlags.Undefined | ts2.TypeFlags.Void)) === 0) : [type];
+  const options = types.map((part) => getNeedleConstructorTypeInfoForSingleType(ts2, checker, part)).filter(Boolean);
+  return [...new Map(options.map((option) => [option.typeName, option])).values()];
+}
+function getNeedleConstructorTypeInfoForSingleType(ts2, checker, type) {
+  const typeName = getNeedleTypeName(type);
   if (!typeName) return void 0;
-  const constructorType = getNeedleConstructorTypeForInstanceType(checker, normalizedType);
+  const constructorType = getNeedleConstructorTypeForInstanceType(checker, type);
   if (!constructorType) return void 0;
   const signature = checker.getSignaturesOfType(constructorType, ts2.SignatureKind.Construct)[0];
   if (!signature) return void 0;
@@ -264,7 +311,7 @@ function getNeedleConstructorTypeForInstanceType(checker, type) {
 function getNeedleNonNullishType(ts2, type) {
   if (!type.isUnion()) return type;
   const nonNullish = type.types.filter((part) => (part.flags & (ts2.TypeFlags.Null | ts2.TypeFlags.Undefined | ts2.TypeFlags.Void)) === 0);
-  return nonNullish[0] ?? type;
+  return nonNullish.length === 1 ? nonNullish[0] : type;
 }
 function getNeedleTypeName(type) {
   const symbolName = getNeedleTypeSymbolName(type);

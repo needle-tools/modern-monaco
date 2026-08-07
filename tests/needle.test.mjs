@@ -40,3 +40,36 @@ test('explicit worker creation does not fall back when the factory fails', async
     const failure = new Error('host worker failure');
     assert.throws(() => createTypeScriptWorker(url, () => { throw failure; }), error => error === failure);
 });
+
+
+test('nested property queries retain enums, containers and constructible unions', () => {
+    const source = `
+        export class Red { strength = 1; }
+        export class Blue { enabled = true; }
+        export interface Entry {
+            /** Render mode. */
+            readonly mode?: "solid" | "wire";
+        }
+        export class Settings {
+            nested!: { entries: Entry[]; choice: Red | Blue | null; missing?: Entry; };
+        }
+    `;
+    const file = '/settings.ts';
+    const options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options);
+    const readFile = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : readFile(name);
+    const program = ts.createProgram([file], options, host);
+    const result = resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file,
+        source.indexOf('nested!'), {propertyName: 'nested'});
+    const entries = result.objectMembers.find(member => member.name === 'entries');
+    const mode = entries.container.elementMembers.find(member => member.name === 'mode');
+    assert.equal(mode.description, 'Render mode.');
+    assert.equal(mode.readonly, true);
+    assert.equal(mode.optional, true);
+    assert.deepEqual(mode.enumOptions.map(option => option.value).sort(), ['solid', 'wire']);
+    const choice = result.objectMembers.find(member => member.name === 'choice');
+    assert.deepEqual(choice.constructorOptions.map(option => option.typeName).sort(), ['Blue', 'Red']);
+    assert.equal(Object.hasOwn(choice, 'constructor') && choice.constructor !== undefined, false);
+    assert.match(choice.type, /null/);
+});
