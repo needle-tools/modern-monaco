@@ -1,8 +1,8 @@
 import type { HighlighterCore, LanguageInput, RegexEngine, ThemeInput, ThemeRegistration } from "@shikijs/core";
 import { createHighlighterCore } from "@shikijs/core";
 import { createOnigurumaEngine, getDefaultWasmLoader, setDefaultWasmLoader } from "@shikijs/engine-oniguruma";
-import { version as tmGrammarsVersion } from "../node_modules/tm-grammars/package.json";
-import { version as tmThemesVersion } from "../node_modules/tm-themes/package.json";
+declare const tmGrammarsVersion: string;
+declare const tmThemesVersion: string;
 
 // ! external modules, don't remove the `.js` extension
 import { cache } from "./cache.js";

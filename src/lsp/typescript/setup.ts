@@ -3,6 +3,7 @@ import type ts from "typescript";
 import type { FormattingOptions } from "vscode-languageserver-types";
 import type { Workspace } from "~/workspace";
 import type { CreateData, Host, TypeScriptWorker, VersionedContent } from "./worker";
+import { createTypeScriptWorker, type TypeScriptWorkerFactory } from './workerFactory';
 import {
   createBlankImportMap,
   type ImportMap,
@@ -28,9 +29,10 @@ export async function setup(
   languageSettings?: Record<string, unknown>,
   formattingOptions?: FormattingOptions & { semicolon?: "ignore" | "insert" | "remove" },
   workspace?: Workspace,
+  workerFactory?: TypeScriptWorkerFactory,
 ) {
   if (!worker) {
-    worker = createWorker(monaco, workspace, languageSettings, formattingOptions);
+    worker = createWorker(monaco, workspace, languageSettings, formattingOptions, workerFactory);
   }
   if (worker instanceof Promise) {
     worker = await worker;
@@ -57,6 +59,7 @@ async function createWorker(
   workspace?: Workspace,
   languageSettings?: Record<string, unknown>,
   formattingOptions?: FormattingOptions & { semicolon?: "ignore" | "insert" | "remove" },
+  workerFactory?: TypeScriptWorkerFactory,
 ) {
   const fs = workspace?.fs;
   const defaultCompilerOptions: CompilerOptions = {
@@ -123,7 +126,7 @@ async function createWorker(
     fs: workspace ? await client.walkFS(workspace.fs, "/") : undefined,
   };
   const worker = monaco.editor.createWebWorker<TypeScriptWorker>({
-    worker: getWorker(createData),
+    worker: getWorker(createData, workerFactory),
     keepIdleModels: true,
     host: {
       openModel: async (uri: string): Promise<boolean> => {
@@ -236,20 +239,8 @@ async function createWorker(
   return worker;
 }
 
-function createWebWorker(): Worker {
-  const workerUrl: URL = new URL("./worker.mjs", import.meta.url);
-  if (workerUrl.origin !== location.origin) {
-    // create a blob url for cross-origin workers if the url is not same-origin
-    return new Worker(
-      URL.createObjectURL(new Blob([`import "${workerUrl.href}"`], { type: "application/javascript" })),
-      { type: "module", name: "typescript-worker" },
-    );
-  }
-  return new Worker(workerUrl, { type: "module", name: "typescript-worker" });
-}
-
-function getWorker(createData: CreateData) {
-  const worker = createWebWorker();
+function getWorker(createData: CreateData, factory?: TypeScriptWorkerFactory) {
+  const worker = createTypeScriptWorker(new URL('./worker.mjs', import.meta.url), factory);
   worker.postMessage(createData);
   return worker;
 }

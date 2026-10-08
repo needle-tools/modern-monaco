@@ -1,4 +1,4 @@
-import { build } from "./build";
+import { build } from "./build.mjs";
 
 async function serveDist(url: URL, req: Request) {
   try {

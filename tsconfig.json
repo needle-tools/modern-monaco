@@ -3,7 +3,8 @@
     "paths": {
       "~/*": ["./src/*"]
     },
-    "lib": ["esnext", "dom", "dom.iterable", "webworker"],
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "types": [],
     "target": "esnext",
     "module": "esnext",
     "moduleResolution": "bundler",

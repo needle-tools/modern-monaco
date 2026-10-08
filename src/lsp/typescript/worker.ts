@@ -2,6 +2,7 @@ import type monacoNS from "monaco-editor-core";
 import type * as lst from "vscode-languageserver-types";
 import { type ImportMap, isBlankImportMap, resolve } from "@esm.sh/import-map";
 import ts from "typescript";
+import { resolveNeedlePropertyTypeInfo } from './propertyTypeInfo';
 import {
   CompletionItemKind,
   CompletionItemTag,
@@ -550,6 +551,12 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
       };
     }
     return null;
+  }
+
+  async resolveNeedlePropertyTypeInfo(uri: string, position: lst.Position, metadata: Record<string, string> = {}) {
+    const document = this.#getTextDocument(uri);
+    if (!document) return null;
+    return resolveNeedlePropertyTypeInfo(ts, this.#languageService, uri, document.offsetAt(position), metadata);
   }
 
   async doSignatureHelp(

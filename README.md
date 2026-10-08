@@ -1,3 +1,7 @@
+> This is `@needle-tools/modern-monaco`, the Needle-maintained variant. See
+> [NEEDLE.md](./NEEDLE.md) for source provenance, changes and build instructions.
+> The upstream documentation follows.
+
 > [!WARNING]
 > **This project is currently under active development. The API may change at any time. Use at your own risk.**
 > Please report any issues or feature requests on the [issues](https://github.com/esm-dev/modern-monaco/issues) page.
