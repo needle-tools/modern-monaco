@@ -155,6 +155,7 @@ export class WorkerBase<Host = undefined, LanguageDocument = undefined> {
   }
 
   async fsNotify(kind: "create" | "remove", path: string, type?: number): Promise<void> {
+    path = new URL(path, "file:///").href;
     const fs = this.#fs ?? (this.#fs = new Map());
     if (kind === "create") {
       if (type) {

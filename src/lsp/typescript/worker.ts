@@ -272,6 +272,19 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
         };
       }
       if (moduleUrl.protocol === "file:") {
+        // Keep TypeScript's extension substitution and precedence for local
+        // sources, including files still waiting to be opened from the workspace.
+        const local = ts.resolveModuleName(moduleUrl.pathname, containingFile, this.#compilerOptions, {
+          fileExists: (path) => {
+            const uri = new URL(path, moduleUrl).href;
+            const directory = new URL(".", uri).href;
+            return this.fileExists(uri) || this.readDir(directory).some(([name, type]) =>
+              type === 1 && new URL(name, directory).href === uri
+            );
+          },
+          readFile: (path) => this.readFile(new URL(path, moduleUrl).href),
+        }).resolvedModule;
+        if (local) moduleUrl = new URL(local.resolvedFileName, moduleUrl);
         const moduleHref = moduleUrl.href;
         if (this.#badImports.has(moduleHref)) {
           return undefined;
