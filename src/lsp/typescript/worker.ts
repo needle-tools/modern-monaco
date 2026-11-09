@@ -70,6 +70,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
   #unknownImports = new Set<string>();
   #badImports = new Set<string>();
   #openPromises = new Map<string, Promise<void>>();
+  #projectValidationQueue: Promise<unknown> = Promise.resolve();
   #fetchPromises = new Map<string, Promise<void>>();
   #apiQueryScopes = new Map<string, Record<string, string>>();
   #httpDocumentCache = new Map<string, TextDocument>();
@@ -594,6 +595,57 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
       this.#apiQueryScopes.delete(uri);
       const scopes = { ...this.#importMap.scopes };
       delete scopes[uri];
+      this.#importMap = { ...this.#importMap, scopes };
+      this.#importMapVersion++;
+      this.#isBlankImportMap = isBlankImportMap(this.#importMap);
+    }
+  }
+
+  getNeedleProjectImports(uris: string[]): string[] {
+    const imports = new Set<string>();
+    for (const uri of uris) {
+      const document = this.#getTextDocument(uri);
+      if (!document) throw new Error(`Project source is not synchronized: ${uri}`);
+      for (const imported of ts.preProcessFile(document.getText(), true, true).importedFiles) imports.add(imported.fileName);
+    }
+    return [...imports];
+  }
+
+  validateNeedleProject(uris: string[], imports: Record<string, string> = {}) {
+    const result = this.#projectValidationQueue.then(() => this.#validateNeedleProject(uris, imports));
+    this.#projectValidationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async #validateNeedleProject(uris: string[], imports: Record<string, string>) {
+    const scope = 'file:///project/';
+    const previous = this.#importMap.scopes?.[scope];
+    this.#apiQueryScopes.set(scope, imports);
+    this.#importMap = { ...this.#importMap, scopes: { ...this.#importMap.scopes, [scope]: imports } };
+    this.#importMapVersion++;
+    this.#isBlankImportMap = isBlankImportMap(this.#importMap);
+    try {
+      for (let attempt = 0; attempt < 16; attempt++) {
+        const result = [];
+        const pending: Promise<unknown>[] = [];
+        for (const uri of uris) {
+          if (!this.#getTextDocument(uri)) throw new Error(`Project validation document is not synchronized: ${uri}`);
+          const validation = this.doValidation(uri);
+          // A fast open can finish during await; retain its promise and recheck diagnostics.
+          pending.push(...this.#fetchPromises.values(), ...this.#openPromises.values());
+          for (const diagnostic of await validation ?? []) result.push({ uri, diagnostic });
+        }
+        pending.push(...this.#fetchPromises.values(), ...this.#openPromises.values());
+        if (pending.length === 0) return result;
+        await Promise.all(pending);
+        this.#importMapVersion++;
+      }
+      throw new Error('Project type resolution did not settle after 16 import layers.');
+    } finally {
+      this.#apiQueryScopes.delete(scope);
+      const scopes = { ...this.#importMap.scopes };
+      if (previous) scopes[scope] = previous;
+      else delete scopes[scope];
       this.#importMap = { ...this.#importMap, scopes };
       this.#importMapVersion++;
       this.#isBlankImportMap = isBlankImportMap(this.#importMap);

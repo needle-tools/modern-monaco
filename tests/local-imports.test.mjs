@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import ts from 'typescript';
+import {readFileSync} from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const bundled = build({
@@ -25,6 +26,23 @@ const mirror = (uri, source = 'export const value = 1;') => ({
     uri: { toString: () => uri }, _versionId: 1, get version() { return this._versionId; }, getValue: () => source,
 });
 const options = { allowJs: true, noLib: true, strict: true, module: 'esnext', moduleResolution: 'bundler' };
+
+test('project validation settles unopened imports and catches the report normalView call error', async () => {
+    const Worker=await bundled;
+    const uri='file:///project/main.ts';
+    const models=[mirror(uri,'import { normalView } from "./normal.js"; normalView();'),
+        mirror('file:///lib.es5.d.ts',readFileSync(require.resolve('typescript/lib/lib.es5.d.ts'),'utf8'))];
+    const worker=new Worker({getMirrorModels:()=>models,host:{
+        openModel:async path=>{if(path!=='file:///project/normal.ts')return false;models.push(mirror(path,'export const normalView = { isNode: true };'));return true;},
+        refreshDiagnostics:async()=>{},
+    }},{fs:['/project/main.ts','/project/normal.ts'],compilerOptions:options,types:{},importMap:{$baseURL:'file:///',imports:{},scopes:{}}});
+    const result=await worker.validateNeedleProject([uri],{});
+    assert.deepEqual(worker.getNeedleProjectImports([uri]),['./normal.js']);
+    assert.equal(result.length,1);
+    assert.equal(result[0].uri,uri);
+    assert.equal(result[0].diagnostic.code,2349);
+    assert.match(result[0].diagnostic.message,/not callable/);
+});
 
 test('local imports use TypeScript extension substitution and source precedence', async () => {
     const Worker = await bundled;
