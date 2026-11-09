@@ -574,7 +574,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
     return resolveNeedlePropertyTypeInfo(ts, this.#languageService, uri, document.offsetAt(position), metadata);
   }
 
-  async queryNeedleApiSymbols(uri: string, options: { symbol?: string; limit?: number } = {}, imports: Record<string, string> = {}) {
+  async queryNeedleApiSymbols(uri: string, options: { symbol?: string; limit?: number; filter?: string; offset?: number } = {}, imports: Record<string, string> = {}) {
     if (!this.#getTextDocument(uri)) throw new Error('API query document is not synchronized.');
     this.#apiQueryScopes.set(uri, imports);
     this.#importMap = { ...this.#importMap, scopes: { ...this.#importMap.scopes, [uri]: imports } };

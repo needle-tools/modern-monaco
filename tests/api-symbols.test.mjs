@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import ts from 'typescript';
 import { queryApiSymbols } from '../src/lsp/typescript/apiSymbols.js';
 
-function query(symbol, limit = 20) {
+function query(symbol, limit = 20, options = {}) {
     const files = {
         '/query.ts': 'import * as api from "./api";',
         '/api.ts': `export { Base as Camera } from './base';
@@ -26,7 +26,7 @@ function query(symbol, limit = 20) {
         getCurrentDirectory: () => '/', getDefaultLibFileName: () => '/lib.d.ts',
         fileExists: name => name in files, readFile: name => files[name],
     });
-    try { return queryApiSymbols(ts, service, '/query.ts', { symbol, limit }); }
+    try { return queryApiSymbols(ts, service, '/query.ts', { symbol, limit, ...options }); }
     finally { service.dispose(); }
 }
 
@@ -36,6 +36,27 @@ test('lists real module exports with bounded results', () => {
     assert.equal(result.total, 4);
     assert.equal(result.truncated, true);
     assert.equal(result.exports.length, 2);
+});
+
+test('export pages advance without repeating the first page and can filter before truncating', () => {
+    const first = query(undefined, 2);
+    assert.equal(first.nextOffset, 2);
+    const second = query(undefined, 2, {offset:first.nextOffset});
+    assert.equal(second.nextOffset, undefined);
+    assert.equal(new Set([...first.exports,...second.exports].map(x=>x.name)).size,4);
+    const filtered = query(undefined, 1, {filter:'option'});
+    assert.deepEqual(filtered.exports,[{name:'Options'}]);
+    assert.equal(filtered.total,1);
+    assert.equal(filtered.truncated,false);
+});
+
+test('member pages and filters retain exact symbol signatures', () => {
+    const first=query('Camera',1);
+    const second=query('Camera',1,{offset:first.nextOffset});
+    assert.notDeepEqual(first.members,second.members);
+    assert.equal(second.nextOffset,undefined);
+    assert.deepEqual(query('Camera',1,{filter:'update'}).members,[{name:'update'}]);
+    assert.match(query('Camera.update',1).signatures[0],/delta: number/);
 });
 
 test('follows reexports and inherited instance members to their declarations', () => {

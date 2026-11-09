@@ -12,11 +12,20 @@ export function queryApiSymbols(ts, service, uri, options = {}) {
     const typeOf = symbol => symbol.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.TypeAlias)
         ? checker.getDeclaredTypeOfSymbol(symbol)
         : checker.getTypeOfSymbolAtLocation(symbol, symbol.valueDeclaration ?? symbol.declarations?.[0] ?? source);
-    const names = symbols => symbols.slice(0, limit).map(symbol => ({ name: symbol.name }));
-    if (!options.symbol) return { status: 'resolved', exports: names(exports), total: exports.length, truncated: exports.length > limit };
+    const offset = options.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('offset must be a nonnegative integer');
+    const filter = options.filter?.toLowerCase() ?? '';
+    const matching = symbols => symbols.filter(symbol => symbol.name.toLowerCase().includes(filter));
+    const names = symbols => symbols.slice(offset, offset + limit).map(symbol => ({ name: symbol.name }));
+    const page = symbols => ({
+        total: symbols.length, truncated: symbols.length > limit,
+        ...(offset + limit < symbols.length ? { nextOffset: offset + limit } : {}),
+    });
+    const matches = matching(exports);
+    if (!options.symbol) return { status: 'resolved', exports: names(matches), ...page(matches) };
     const parts = options.symbol.split('.');
     let symbol = exports.find(value => value.name === parts[0]);
-    if (!symbol) return { status: 'not-found', symbol: options.symbol, exports: names(exports), total: exports.length, truncated: exports.length > limit };
+    if (!symbol) return { status: 'not-found', symbol: options.symbol, exports: names(matches), ...page(matches) };
     symbol = unalias(symbol);
     for (const part of parts.slice(1)) {
         const staticMember = checker.getPropertyOfType(typeOf(symbol), part);
@@ -27,7 +36,7 @@ export function queryApiSymbols(ts, service, uri, options = {}) {
     }
     const type = typeOf(symbol);
     const instanceType = symbol.flags & (ts.SymbolFlags.Class | ts.SymbolFlags.Interface) ? checker.getDeclaredTypeOfSymbol(symbol) : type;
-    const members = checker.getPropertiesOfType(instanceType).sort((a, b) => a.name.localeCompare(b.name));
+    const members = matching(checker.getPropertiesOfType(instanceType).sort((a, b) => a.name.localeCompare(b.name)));
     const signatures = [...type.getCallSignatures(), ...type.getConstructSignatures()];
     let remaining = 16000;
     let truncated = members.length > limit || signatures.length > limit;
@@ -49,6 +58,7 @@ export function queryApiSymbols(ts, service, uri, options = {}) {
             return { uri: file.fileName, line: location.line + 1, column: location.character + 1 };
         }),
         members: names(members), memberCount: members.length,
+        ...(offset + limit < members.length ? { nextOffset: offset + limit } : {}),
     };
     return { ...result, truncated };
 }
