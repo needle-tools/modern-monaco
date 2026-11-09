@@ -3,6 +3,7 @@ import type * as lst from "vscode-languageserver-types";
 import { type ImportMap, isBlankImportMap, resolve } from "@esm.sh/import-map";
 import ts from "typescript";
 import { resolveNeedlePropertyTypeInfo } from './propertyTypeInfo';
+import { queryApiSymbols } from './apiSymbols';
 import {
   CompletionItemKind,
   CompletionItemTag,
@@ -70,6 +71,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
   #badImports = new Set<string>();
   #openPromises = new Map<string, Promise<void>>();
   #fetchPromises = new Map<string, Promise<void>>();
+  #apiQueryScopes = new Map<string, Record<string, string>>();
   #httpDocumentCache = new Map<string, TextDocument>();
 
   constructor(ctx: monacoNS.worker.IWorkerContext<Host>, createData: CreateData) {
@@ -572,6 +574,32 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
     return resolveNeedlePropertyTypeInfo(ts, this.#languageService, uri, document.offsetAt(position), metadata);
   }
 
+  async queryNeedleApiSymbols(uri: string, options: { symbol?: string; limit?: number } = {}, imports: Record<string, string> = {}) {
+    if (!this.#getTextDocument(uri)) throw new Error('API query document is not synchronized.');
+    this.#apiQueryScopes.set(uri, imports);
+    this.#importMap = { ...this.#importMap, scopes: { ...this.#importMap.scopes, [uri]: imports } };
+    this.#importMapVersion++;
+    this.#isBlankImportMap = isBlankImportMap(this.#importMap);
+    try {
+      // Resolution schedules remote declarations. Drain successive import layers before querying.
+      for (let attempt = 0; attempt < 16; attempt++) {
+        this.#languageService.getSemanticDiagnostics(uri);
+        if (this.#fetchPromises.size === 0 && this.#openPromises.size === 0) {
+          return queryApiSymbols(ts, this.#languageService, uri, options);
+        }
+        await Promise.all([...this.#fetchPromises.values(), ...this.#openPromises.values()]);
+      }
+      throw new Error('API declaration resolution did not settle after 16 import layers.');
+    } finally {
+      this.#apiQueryScopes.delete(uri);
+      const scopes = { ...this.#importMap.scopes };
+      delete scopes[uri];
+      this.#importMap = { ...this.#importMap, scopes };
+      this.#importMapVersion++;
+      this.#isBlankImportMap = isBlankImportMap(this.#importMap);
+    }
+  }
+
   async doSignatureHelp(
     uri: string,
     position: number,
@@ -874,9 +902,9 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
       this.#updateJsxImportSource();
     }
     if (importMap) {
-      this.#importMap = importMap;
+      this.#importMap = { ...importMap, scopes: { ...importMap.scopes, ...Object.fromEntries(this.#apiQueryScopes) } };
       this.#importMapVersion++;
-      this.#isBlankImportMap = isBlankImportMap(importMap);
+      this.#isBlankImportMap = isBlankImportMap(this.#importMap);
       this.#updateJsxImportSource();
     }
     if (types) {

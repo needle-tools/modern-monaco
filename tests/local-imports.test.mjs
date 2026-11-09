@@ -104,3 +104,24 @@ test('workspace create/remove notifications use the same file URLs as the initia
     await worker.fsNotify('remove', '/project/progressive.ts', 1);
     assert.deepEqual(worker.readDir('file:///project/'), []);
 });
+
+test('API query RPC awaits declarations and isolates its scope across configuration refresh', async () => {
+    const Worker = await bundled;
+    const uri = 'file:///api-query.ts';
+    const models = [mirror(uri, 'import * as api from "runtime"; export { api };')];
+    let open;
+    const worker = new Worker({ getMirrorModels: () => models, host: {
+        openModel: path => new Promise(resolve => {
+            open = () => { models.push(mirror(path, '/** Selected API. */ export function chosen(): number { return 1; }')); resolve(true); };
+        }),
+        refreshDiagnostics: async () => {},
+    } }, { fs: ['/api-query.ts', '/selected.ts'], compilerOptions: options, types: {},
+        importMap: { $baseURL: 'file:///', imports: {}, scopes: {} } });
+    const result = worker.queryNeedleApiSymbols(uri, { symbol: 'chosen' }, { runtime: 'file:///selected.ts' });
+    assert.equal(typeof open, 'function');
+    await worker.updateCompilerOptions({ importMap: { $baseURL: 'file:///', imports: {}, scopes: {} } });
+    open();
+    const response = await result;
+    assert.equal(response.documentation, 'Selected API.', JSON.stringify(response));
+    assert.deepEqual((await worker.doValidation(uri)).map(value => value.code), [2307]);
+});

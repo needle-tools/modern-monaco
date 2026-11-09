@@ -15,6 +15,13 @@ worker factory directly; no global factory hook or consumer patch step is needed
 The worker also exposes `resolveNeedlePropertyTypeInfo`, implemented in
 `src/lsp/typescript/propertyTypeInfo.js` and covered by editor regression tests.
 
+`queryNeedleApiSymbols` queries that same language-service program for module
+exports, dotted members, overloads, JSDoc and definition locations. Each transient
+query has its own import-map scope; configuration refreshes retain active query
+scopes, which are removed after completion. The editor supplies project-selected
+declarations rather than a separate AI type resolver. Maintained tests cover
+aliases, inherited members, type-only contexts and asynchronous declaration loads.
+
 For standalone development, run `npm ci` using this fork's package-lock.json.
 In the editor workspace, install through the editor's root npm lockfile. npm's `prepare`
 lifecycle builds the package with Node; `npm run build:monaco` rebuilds it from
