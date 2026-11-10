@@ -930,6 +930,25 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
 
   // #region public methods used by the host
 
+  override async fsNotify(kind: "create" | "remove", path: string, type?: number): Promise<void> {
+    await super.fsNotify(kind, path, type);
+    if (kind !== "create" || type !== 1) return;
+    let invalidated = false;
+    // A missing .js import may now resolve to a newly created .ts or .d.ts file.
+    for (const uri of this.#badImports) {
+      if (!uri.startsWith('file:///')) continue;
+      this.#badImports.delete(uri);
+      invalidated = true;
+    }
+    this.#importMapVersion++;
+    if (invalidated) {
+      for (const model of this.getMirrorModels()) {
+        const uri = model.uri.toString();
+        if (uri.startsWith('file:///')) await this.host.refreshDiagnostics(uri);
+      }
+    }
+  }
+
   async fetchHttpModule(specifier: string, containingFile: string): Promise<void> {
     if (this.#unknownImports.has(specifier)) {
       const res = await cache.fetch(specifier);

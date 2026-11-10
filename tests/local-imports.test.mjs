@@ -112,6 +112,52 @@ test('a missing local import still reports a module resolution error', async () 
     assert.deepEqual((await worker.doValidation(uri)).map(d => d.code), [2307]);
 });
 
+test('a generated context created after the first diagnostic resolves without editing main.ts', async () => {
+    const Worker=await bundled;
+    const main='file:///project/main.ts';
+    const declaration='file:///project/.needle/generated/project-context.d.ts';
+    const models=[mirror(main,'import type { ProjectScriptContext } from "./.needle/generated/project-context.js"; export const renderer: ProjectScriptContext["renderer"] = "webgl";')];
+    const contents=new Map();
+    const refreshed=[];
+    const worker=new Worker({getMirrorModels:()=>models,host:{
+        openModel:async uri=>{if(!contents.has(uri))return false;models.push(mirror(uri,contents.get(uri)));return true;},
+        refreshDiagnostics:async uri=>{refreshed.push(uri);},
+    }},{fs:['/project/main.ts'],compilerOptions:options,types:{},importMap:{$baseURL:'file:///',imports:{},scopes:{}}});
+    await worker.doValidation(main);await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual((await worker.doValidation(main)).map(d=>d.code),[2307]);
+    refreshed.length=0;
+    contents.set(declaration,'export type ProjectScriptContext = { renderer: "webgpu" };');
+    await worker.fsNotify('create','/project/.needle',2);
+    await worker.fsNotify('create','/project/.needle/generated',2);
+    await worker.fsNotify('create','/project/.needle/generated/project-context.d.ts',1);
+    await worker.doValidation(main);await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual((await worker.doValidation(main)).map(d=>d.code),[2322]);
+    assert.ok(refreshed.includes(main),'file creation must refresh the existing diagnostic');
+});
+
+test('a pending missing-file response cannot poison resolution after the declaration was created',async()=>{
+    const Worker=await bundled;
+    const main='file:///project/main.ts';
+    const declaration='file:///project/.needle/generated/project-context.d.ts';
+    const models=[mirror(main,'import type { ProjectScriptContext } from "./.needle/generated/project-context.js"; export const renderer: ProjectScriptContext["renderer"] = "webgl";')];
+    let finishMissing;
+    let exists=false;
+    const worker=new Worker({getMirrorModels:()=>models,host:{
+        openModel:uri=>{
+            if(exists && uri===declaration){models.push(mirror(uri,'export type ProjectScriptContext = { renderer: "webgpu" };'));return Promise.resolve(true);}
+            return new Promise(resolve=>{finishMissing=()=>resolve(false);});
+        },refreshDiagnostics:async()=>{},
+    }},{fs:['/project/main.ts'],compilerOptions:options,types:{},importMap:{$baseURL:'file:///',imports:{},scopes:{}}});
+    await worker.doValidation(main);assert.equal(typeof finishMissing,'function');
+    exists=true;
+    await worker.fsNotify('create','/project/.needle',2);
+    await worker.fsNotify('create','/project/.needle/generated',2);
+    await worker.fsNotify('create','/project/.needle/generated/project-context.d.ts',1);
+    finishMissing();await new Promise(resolve=>setImmediate(resolve));
+    await worker.doValidation(main);await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual((await worker.doValidation(main)).map(d=>d.code),[2322]);
+});
+
 test('workspace create/remove notifications use the same file URLs as the initial file list', async () => {
     const Worker = await bundled;
     const worker = new Worker({ getMirrorModels: () => [], host: {} }, {
