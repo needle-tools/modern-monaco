@@ -27,6 +27,63 @@ const mirror = (uri, source = 'export const value = 1;') => ({
 });
 const options = { allowJs: true, noLib: true, strict: true, module: 'esnext', moduleResolution: 'bundler' };
 
+test('project validation follows a finite declaration chain deeper than sixteen layers', async () => {
+    const Worker = await bundled, main = 'file:///project/main.ts';
+    const sources = new Map(Array.from({length: 80}, (_, i) => [`file:///project/layer${i}.d.ts`,
+        i === 79 ? 'export declare const value: number;' : `export {value} from "./layer${i + 1}.js";`]));
+    const models = [mirror(main, 'import {value} from "./layer0.js"; export const wrong: string = value;')];
+    const worker = new Worker({getMirrorModels: () => models, host: {
+        openModel: async uri => {
+            if (!sources.has(uri)) return false;
+            models.push(mirror(uri, sources.get(uri)));
+            return true;
+        }, refreshDiagnostics: async () => {},
+    }}, {fs: ['/project/main.ts', ...[...sources.keys()].map(uri => new URL(uri).pathname)],
+        compilerOptions: options, types: {}, importMap: {$baseURL: 'file:///', imports: {}, scopes: {}}});
+    const result = await worker.validateNeedleProject([main], {});
+    assert.equal(models.length, 81);
+    assert.deepEqual(result.map(entry => entry.diagnostic.code), [2322]);
+});
+
+test('a stalled declaration reports its URL and releases the validation queue', {timeout: 3000}, async () => {
+    const Worker = await bundled, main = 'file:///project/main.ts', dependency = 'file:///project/pending.ts';
+    const ready = 'file:///project/ready.ts';
+    const models = [mirror(main, 'import {value as early} from "./ready.js"; import {value} from "./pending.js"; export {value, early};')];
+    let finish;
+    const worker = new Worker({getMirrorModels: () => models, host: {
+        openModel: uri => {
+            if (uri === ready) {models.push(mirror(ready)); return Promise.resolve(true);}
+            return new Promise(resolve => {finish = resolve;});
+        }, refreshDiagnostics: async () => {},
+    }}, {fs: ['/project/main.ts', '/project/pending.ts', '/project/ready.ts'], compilerOptions: options, types: {},
+        importMap: {$baseURL: 'file:///', imports: {}, scopes: {}}});
+    try {
+        await assert.rejects(worker.validateNeedleProject([main], {}, 20), error =>
+            /timed out/i.test(error.message) && error.message.includes(dependency) && !error.message.includes(ready));
+    } finally {
+        models.push(mirror(dependency));
+        finish?.(true);
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(await worker.validateNeedleProject([main], {}), []);
+});
+
+test('immediately fulfilled opens cannot bypass the declaration deadline', async t => {
+    const Worker = await bundled, main = 'file:///project/main.ts';
+    const models = [mirror(main, 'import {value} from "./pending.js"; export {value};')];
+    let now = 0, calls = 0;
+    t.mock.method(Date, 'now', () => now);
+    const worker = new Worker({getMirrorModels: () => models, host: {
+        openModel: async () => {
+            now += 10;
+            if (++calls > 20) throw new Error('fixture safety stop');
+            return true;
+        }, refreshDiagnostics: async () => {},
+    }}, {fs: ['/project/main.ts', '/project/pending.ts'], compilerOptions: options, types: {},
+        importMap: {$baseURL: 'file:///', imports: {}, scopes: {}}});
+    await assert.rejects(worker.validateNeedleProject([main], {}, 20), /Project declaration loading timed out/);
+});
+
 test('project validation settles unopened imports and catches the report normalView call error', async () => {
     const Worker=await bundled;
     const uri='file:///project/main.ts';

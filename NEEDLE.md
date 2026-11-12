@@ -22,6 +22,14 @@ scopes, which are removed after completion. The editor supplies project-selected
 declarations rather than a separate AI type resolver. Maintained tests cover
 aliases, inherited members, type-only contexts and asynchronous declaration loads.
 
+`validateNeedleProject` drains asynchronous declaration imports without a fixed
+layer count. Its default 60-second loading deadline reports unresolved request
+URLs and releases the validation scope/queue on failure. Settled-promise loops
+also check elapsed time, so microtasks cannot bypass the deadline. Fetches already
+in flight remain shared cache work; validation does not continue in the background
+after its deadline. The optional third argument can shorten the deadline for
+internal callers/tests. API queries retain their separate resolution policy.
+
 For standalone development, run `npm ci` using this fork's package-lock.json.
 In the editor workspace, install through the editor's root npm lockfile. npm's `prepare`
 lifecycle builds the package with Node; `npm run build:monaco` rebuilds it from

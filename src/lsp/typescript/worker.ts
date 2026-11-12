@@ -611,13 +611,14 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
     return [...imports];
   }
 
-  validateNeedleProject(uris: string[], imports: Record<string, string> = {}) {
-    const result = this.#projectValidationQueue.then(() => this.#validateNeedleProject(uris, imports));
+  validateNeedleProject(uris: string[], imports: Record<string, string> = {}, timeoutMs = 60_000) {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60_000) throw new Error('Invalid project validation timeout.');
+    const result = this.#projectValidationQueue.then(() => this.#validateNeedleProject(uris, imports, timeoutMs));
     this.#projectValidationQueue = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  async #validateNeedleProject(uris: string[], imports: Record<string, string>) {
+  async #validateNeedleProject(uris: string[], imports: Record<string, string>, timeoutMs: number) {
     const scope = 'file:///project/';
     const previous = this.#importMap.scopes?.[scope];
     this.#apiQueryScopes.set(scope, imports);
@@ -625,22 +626,41 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
     this.#importMapVersion++;
     this.#isBlankImportMap = isBlankImportMap(this.#importMap);
     try {
-      for (let attempt = 0; attempt < 16; attempt++) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
         const result = [];
-        const pending: Promise<unknown>[] = [];
+        const pending: [string, Promise<void>][] = [];
         for (const uri of uris) {
           if (!this.#getTextDocument(uri)) throw new Error(`Project validation document is not synchronized: ${uri}`);
           const validation = this.doValidation(uri);
           // A fast open can finish during await; retain its promise and recheck diagnostics.
-          pending.push(...this.#fetchPromises.values(), ...this.#openPromises.values());
+          pending.push(...this.#fetchPromises, ...this.#openPromises);
           for (const diagnostic of await validation ?? []) result.push({ uri, diagnostic });
         }
-        pending.push(...this.#fetchPromises.values(), ...this.#openPromises.values());
+        pending.push(...this.#fetchPromises, ...this.#openPromises);
         if (pending.length === 0) return result;
-        await Promise.all(pending);
+        const timeoutError = () => {
+          const active = pending.filter(([url, promise]) =>
+            this.#fetchPromises.get(url) === promise || this.#openPromises.get(url) === promise
+          );
+          const urls = [...new Set((active.length ? active : pending).map(([url]) => url))];
+          return new Error(`Project declaration loading timed out after ${timeoutMs}ms. ${active.length ? 'Pending' : 'Last requested'}: ${urls.slice(0, 5).join(', ')}${urls.length > 5 ? ` (${urls.length} total)` : ''}`);
+        };
+        // Settled promises can otherwise keep the loop in microtasks past its timer.
+        if (Date.now() >= deadline) throw timeoutError();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            Promise.all(pending.map(([, promise]) => promise)),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(timeoutError()), Math.max(0, deadline - Date.now()));
+            }),
+          ]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
         this.#importMapVersion++;
       }
-      throw new Error('Project type resolution did not settle after 16 import layers.');
     } finally {
       this.#apiQueryScopes.delete(scope);
       const scopes = { ...this.#importMap.scopes };
