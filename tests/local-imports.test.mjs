@@ -7,13 +7,15 @@ import ts from 'typescript';
 import {readFileSync} from 'node:fs';
 
 const require = createRequire(import.meta.url);
+const artifact = process.env.NEEDLE_MONACO_DIST === '1' ? 'dist' : 'src';
+const extension = artifact === 'dist' ? 'mjs' : 'ts';
 const bundled = build({
-    entryPoints: [fileURLToPath(new URL('../src/lsp/typescript/worker.ts', import.meta.url))],
+    entryPoints: [fileURLToPath(new URL(`../${artifact}/lsp/typescript/worker.${extension}`, import.meta.url))],
     bundle: true, write: false, platform: 'node', format: 'cjs', external: ['typescript'],
     plugins: [{ name: 'worker-host', setup(builder) {
-        builder.onResolve({ filter: /(?:editor-worker|libs)\.js$/ }, args => ({ path: args.path, namespace: 'worker-host' }));
+        builder.onResolve({ filter: /(?:editor-worker|libs)\.(?:m?js)$/ }, args => ({ path: args.path, namespace: 'worker-host' }));
         builder.onLoad({ filter: /.*/, namespace: 'worker-host' }, args => ({
-            contents: args.path.endsWith('libs.js') ? 'export default {}' : 'export function initializeWorker() {}',
+            contents: /libs\.(?:m?js)$/.test(args.path) ? 'export default {}' : 'export function initializeWorker() {}',
         }));
     } }],
 }).then(result => {
@@ -26,6 +28,69 @@ const mirror = (uri, source = 'export const value = 1;') => ({
     uri: { toString: () => uri }, _versionId: 1, get version() { return this._versionId; }, getValue: () => source,
 });
 const options = { allowJs: true, noLib: true, strict: true, module: 'esnext', moduleResolution: 'bundler' };
+
+const hostSetup = build({
+    entryPoints: [fileURLToPath(new URL(`../${artifact}/lsp/typescript/setup.${extension}`, import.meta.url))],
+    bundle: true, write: false, platform: 'node', format: 'cjs',
+    define: {'import.meta.url': JSON.stringify(import.meta.url)},
+    plugins: [{name: 'language-host', setup(builder) {
+        builder.onLoad({filter: /typescript[/\\]setup\.(?:ts|mjs)$/}, args => ({
+            contents: readFileSync(args.path, 'utf8') + '\nexport {createWorker};', loader: extension === 'ts' ? 'ts' : 'js',
+        }));
+        builder.onResolve({filter: /(?:client|cache)\.(?:m?js)$/}, args => ({path: args.path, namespace: 'language-host'}));
+        builder.onLoad({filter: /.*/, namespace: 'language-host'}, args => ({contents: /cache\.(?:m?js)$/.test(args.path)
+            ? 'export const cache = {fetch() {throw new Error("Unexpected network request");}};'
+            : 'export async function walkFS() {return ["/project/main.ts", "/project/postfx.controls.json"];} export function init() {} export function registerBasicFeatures() {} export function registerAutoComplete() {} export function registerSignatureHelp() {} export function registerCodeAction() {}',
+        }));
+    }}],
+}).then(result => {
+    const module = {exports: {}};
+    new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
+    return module.exports.createWorker;
+});
+
+test('JSON imports opened by the language host are synchronized before project validation continues', async () => {
+    const Worker = await bundled, createWorker = await hostSetup;
+    const main = 'file:///project/main.ts', json = 'file:///project/postfx.controls.json';
+    const models = [mirror(main, 'import settings from "./postfx.controls.json"; export const wrong: string = settings.samples;')];
+    const opened = new Map();
+    let data, languageWorker;
+    const notFound = () => Object.assign(new Error('Not found'), {FS_ERROR: 'NOT_FOUND'});
+    const workspace = {
+        fs: {readTextFile: async path => {
+            if (path === 'tsconfig.json') return JSON.stringify({compilerOptions: {...options, resolveJsonModule: true, allowSyntheticDefaultImports: true}});
+            throw notFound();
+        }, watch: () => () => {}},
+        _openTextDocument: async uri => {opened.set(uri, mirror(uri, '{"samples": 16}'));},
+    };
+    const facade = {
+        withSyncedResources: async uris => {
+            for (const uri of uris) if (!models.some(model => model.uri.toString() === uri.toString())) models.push(opened.get(uri.toString()));
+            return languageWorker;
+        },
+    };
+    const monaco = {
+        Uri: {parse: uri => ({toString: () => uri})},
+        editor: {addCommand() {}, getModel: () => undefined, createWebWorker: ({host}) => {
+            languageWorker = new Worker({getMirrorModels: () => models, host}, data);
+            return facade;
+        }},
+    };
+    await createWorker(monaco, workspace, {}, undefined, () => ({postMessage: value => {data = value;}}));
+    const result = await languageWorker.validateNeedleProject([main], {}, 100);
+    assert.ok(models.some(model => model.uri.toString() === json));
+    assert.deepEqual(result.map(entry => entry.diagnostic.code), [2322]);
+});
+
+test('missing JSON imports return a source diagnostic rather than waiting for a model', async () => {
+    const Worker = await bundled, main = 'file:///project/main.ts';
+    const models = [mirror(main, 'import settings from "./missing.json"; export const value = settings.samples;')];
+    const worker = new Worker({getMirrorModels: () => models, host: {openModel: async () => false, refreshDiagnostics: async () => {}}}, {
+        fs: ['/project/main.ts'], compilerOptions: {...options, resolveJsonModule: true, allowSyntheticDefaultImports: true}, types: {},
+        importMap: {$baseURL: 'file:///', imports: {}, scopes: {}},
+    });
+    assert.deepEqual((await worker.validateNeedleProject([main], {}, 100)).map(entry => entry.diagnostic.code), [2307]);
+});
 
 test('project validation follows a finite declaration chain deeper than sixteen layers', async () => {
     const Worker = await bundled, main = 'file:///project/main.ts';

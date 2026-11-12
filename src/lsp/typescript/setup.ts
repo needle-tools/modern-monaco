@@ -135,6 +135,8 @@ async function createWorker(
         }
         try {
           await workspace._openTextDocument(uri);
+          // Imports such as JSON belong to another language but still need TS mirrors.
+          await worker.withSyncedResources([monaco.Uri.parse(uri)]);
         } catch (error) {
           if (isFsNotFoundError(error)) {
             return false;
