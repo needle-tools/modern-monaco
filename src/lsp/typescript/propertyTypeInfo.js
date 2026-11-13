@@ -6,7 +6,8 @@ export function resolveNeedlePropertyTypeInfo(ts2, languageService, fileName, po
   const node = findNeedleIdentifierAtPosition(ts2, sourceFile, position);
   if (!node) return null;
   const symbol = checker.getSymbolAtLocation(node);
-  const type = checker.getTypeAtLocation(node);
+  const typeNode = ts2.isStringLiteral(node) && ts2.isElementAccessExpression(node.parent) ? node.parent : node;
+  const type = checker.getTypeAtLocation(typeNode);
   const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
   const checkedTypeText = checker.typeToString(type);
   const declaredTypeText = declaration && "type" in declaration ? declaration.type?.getText() : void 0;
@@ -36,7 +37,9 @@ function findNeedleIdentifierAtPosition(ts2, sourceFile, position) {
   let result;
   const visit = (node) => {
     if (result) return;
-    if (ts2.isIdentifier(node) && node.getStart(sourceFile) <= position && position <= node.getEnd()) {
+    const isPropertyToken = ts2.isIdentifier(node)
+      || (ts2.isStringLiteral(node) && ts2.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node);
+    if (isPropertyToken && node.getStart(sourceFile) <= position && position <= node.getEnd()) {
       result = node;
       return;
     }

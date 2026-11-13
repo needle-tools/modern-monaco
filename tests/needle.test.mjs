@@ -73,3 +73,29 @@ test('nested property queries retain enums, containers and constructible unions'
     assert.equal(Object.hasOwn(choice, 'constructor') && choice.constructor !== undefined, false);
     assert.match(choice.type, /null/);
 });
+
+
+test('quoted property queries retain the original field type, docs and readonly flag', () => {
+    const source = `interface Owner {
+        /** Quoted mode. */
+        readonly "mode-with-dash"?: "solid" | "wire";
+    }
+    declare const owner: Owner;
+    owner["mode-with-dash"];`;
+    const file = '/quoted.ts';
+    const service = ts.createLanguageService({
+        getCompilationSettings: () => ({strict: true, noLib: true}),
+        getScriptFileNames: () => [file], getScriptVersion: () => '1',
+        getScriptSnapshot: name => name === file ? ts.ScriptSnapshot.fromString(source) : undefined,
+        getCurrentDirectory: () => '/', getDefaultLibFileName: () => '/lib.d.ts',
+        fileExists: name => name === file, readFile: name => name === file ? source : undefined,
+    });
+    try {
+        const info = resolveNeedlePropertyTypeInfo(ts, service, file, source.lastIndexOf('mode-with-dash') + 1,
+            {propertyName: 'mode-with-dash', typeName: 'Owner'});
+        assert.equal(info?.readonly, true);
+        assert.equal(info.optional, true);
+        assert.equal(info.description, 'Quoted mode.');
+        assert.deepEqual(info.enumOptions.map(option => option.value).sort(), ['solid', 'wire']);
+    } finally {service.dispose();}
+});
