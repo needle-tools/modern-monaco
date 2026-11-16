@@ -30,6 +30,7 @@ export function resolveNeedlePropertyTypeInfo(ts2, languageService, fileName, po
     container: getNeedleContainerTypeInfo(ts2, checker, type, program),
     constructor: getNeedleConstructorTypeInfo(ts2, checker, type),
     constructorOptions: getNeedleConstructorTypeOptions(ts2, checker, type),
+    unionOptions: getNeedleUnionTypeInfo(ts2, checker, type, program),
     objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, type, program)
   };
 }
@@ -65,6 +66,7 @@ function getNeedleDefaultValue(tags) {
   return text?.replace(/^`|`$/g, "") || void 0;
 }
 function getNeedleLiteralEnumOptions(ts2, checker, type, program, declaration) {
+  if (type.isUnion() && type.types.some(part => (part.flags & (ts2.TypeFlags.String | ts2.TypeFlags.Number | ts2.TypeFlags.Object | ts2.TypeFlags.Any | ts2.TypeFlags.Unknown)) !== 0)) return void 0;
   const declarationOptions = getNeedleLiteralEnumOptionsFromDeclaration(ts2, checker, declaration);
   if (declarationOptions?.length) return declarationOptions;
   const aliasOptions = getNeedleLiteralEnumOptionsFromAliasDeclaration(ts2, checker, type);
@@ -258,10 +260,22 @@ function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, s
       container: getNeedleContainerTypeInfo(ts2, checker, memberType, program, depth + 1, branchSeen),
       constructor: getNeedleConstructorTypeInfo(ts2, checker, memberType),
       constructorOptions: getNeedleConstructorTypeOptions(ts2, checker, memberType),
+      unionOptions: getNeedleUnionTypeInfo(ts2, checker, declaredMemberType, program, depth + 1, branchSeen),
       objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, memberType, program, depth + 1, branchSeen)
     };
   }).filter(Boolean);
   return members.length > 0 ? members : void 0;
+}
+function getNeedleUnionTypeInfo(ts2, checker, type, program, depth = 0, seen = new Set()) {
+  if (depth > 6 || !type.isUnion()) return void 0;
+  const parts = type.types.filter(part => (part.flags & (ts2.TypeFlags.Null | ts2.TypeFlags.Undefined | ts2.TypeFlags.Void)) === 0);
+  if (parts.length < 2) return void 0;
+  return parts.map(part => ({
+    name: checker.typeToString(part), type: checker.typeToString(part),
+    container: getNeedleContainerTypeInfo(ts2, checker, part, program, depth + 1, seen),
+    constructor: getNeedleConstructorTypeInfo(ts2, checker, part),
+    objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, part, program, depth + 1, seen),
+  }));
 }
 function isNeedleDefaultLibraryType(type) {
   const symbol = type.getSymbol() ?? type.aliasSymbol;

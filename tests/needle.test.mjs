@@ -5,6 +5,21 @@ import { transform } from 'esbuild';
 import ts from 'typescript';
 import { resolveNeedlePropertyTypeInfo } from '../src/lsp/typescript/propertyTypeInfo.js';
 
+test('mixed and discriminated unions preserve every branch rather than a partial enum', () => {
+    const source = `type Choice = {kind: "amount"; value: number} | {kind: "text"; value: string};
+        class Settings { choice!: Choice | null; mixed!: number | "auto"; }`;
+    const file = '/union.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name + '!'), {propertyName: name});
+    const choice = query('choice');
+    assert.equal(choice.unionOptions.length, 2);
+    assert.deepEqual(choice.unionOptions.map(branch => branch.objectMembers.find(field => field.name === 'value').type).sort(), ['number', 'string']);
+    assert.deepEqual(query('mixed').unionOptions.map(branch => branch.type).sort(), ['"auto"', 'number']);
+    assert.equal(query('mixed').enumOptions, undefined);
+});
+
 test('property queries retain readonly, optional, enum and documentation metadata', () => {
     const source = `export class Settings {
         /** Preferred mode. */
