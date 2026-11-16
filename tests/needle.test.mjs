@@ -5,6 +5,22 @@ import { transform } from 'esbuild';
 import ts from 'typescript';
 import { resolveNeedlePropertyTypeInfo } from '../src/lsp/typescript/propertyTypeInfo.js';
 
+test('collection element unions and readonly membership survive type queries', () => {
+    const source = 'class Settings { entries!: Map<string, {kind: "a"; amount: number} | {kind: "b"; text: string}>; locked!: ReadonlySet<string>; list!: readonly number[]; lockedRules!: Readonly<Record<string, number>>; flag!: boolean; mixedFlag!: boolean | boolean[]; }';
+    const file = '/collections.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name + '!'), {propertyName: name});
+    assert.equal(query('entries').container.valueOptions.length, 2);
+    assert.equal(query('locked').container.readonly, true);
+    assert.equal(query('list').container.kind, 'array');
+    assert.equal(query('list').container.readonly, true);
+    assert.equal(query('lockedRules').container.readonly, true);
+    assert.equal(query('flag').unionOptions, undefined);
+    assert.deepEqual(query('mixedFlag').unionOptions.map(branch => branch.type).sort(), ['boolean', 'boolean[]']);
+});
+
 test('mixed and discriminated unions preserve every branch rather than a partial enum', () => {
     const source = `type Choice = {kind: "amount"; value: number} | {kind: "text"; value: string};
         class Settings { choice!: Choice | null; mixed!: number | "auto"; }`;

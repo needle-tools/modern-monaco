@@ -170,25 +170,29 @@ function getNeedleLiteralTypeValue(type) {
 function getNeedleContainerTypeInfo(ts2, checker, type, program, depth = 0, seen = /* @__PURE__ */ new Set()) {
   const normalizedType = getNeedleNonNullishType(ts2, type);
   const typeArguments = checker.getTypeArguments(normalizedType);
-  if (checker.isArrayType(normalizedType) || checker.isTupleType(normalizedType)) {
+  const symbolName = getNeedleTypeSymbolName(normalizedType);
+  if (checker.isArrayType(normalizedType) || checker.isTupleType(normalizedType) || symbolName === "ReadonlyArray") {
     const elementType = typeArguments[0];
     if (!elementType) return { kind: "array" };
     return {
       kind: "array",
+      readonly: symbolName === "ReadonlyArray" || normalizedType.target?.readonly === true,
       elementType: checker.typeToString(elementType),
       elementTypeName: getNeedleTypeName(elementType),
       elementConstructor: getNeedleConstructorTypeInfo(ts2, checker, elementType),
+      elementOptions: getNeedleUnionTypeInfo(ts2, checker, elementType, program, depth + 1, seen),
       elementMembers: getNeedleObjectMemberTypeInfo(ts2, checker, elementType, program, depth + 1, seen)
     };
   }
-  const symbolName = getNeedleTypeSymbolName(normalizedType);
   if ((symbolName === "Set" || symbolName === "ReadonlySet") && typeArguments[0]) {
     const elementType = typeArguments[0];
     return {
       kind: "set",
+      readonly: symbolName === "ReadonlySet",
       elementType: checker.typeToString(elementType),
       elementTypeName: getNeedleTypeName(elementType),
       elementConstructor: getNeedleConstructorTypeInfo(ts2, checker, elementType),
+      elementOptions: getNeedleUnionTypeInfo(ts2, checker, elementType, program, depth + 1, seen),
       elementMembers: getNeedleObjectMemberTypeInfo(ts2, checker, elementType, program, depth + 1, seen)
     };
   }
@@ -196,10 +200,12 @@ function getNeedleContainerTypeInfo(ts2, checker, type, program, depth = 0, seen
     const valueType = typeArguments[1];
     return {
       kind: "map",
+      readonly: symbolName === "ReadonlyMap",
       keyType: typeArguments[0] ? checker.typeToString(typeArguments[0]) : void 0,
       valueType: checker.typeToString(valueType),
       valueTypeName: getNeedleTypeName(valueType),
       valueConstructor: getNeedleConstructorTypeInfo(ts2, checker, valueType),
+      valueOptions: getNeedleUnionTypeInfo(ts2, checker, valueType, program, depth + 1, seen),
       valueMembers: getNeedleObjectMemberTypeInfo(ts2, checker, valueType, program, depth + 1, seen)
     };
   }
@@ -207,10 +213,12 @@ function getNeedleContainerTypeInfo(ts2, checker, type, program, depth = 0, seen
   if (stringIndexType) {
     return {
       kind: "object",
+      readonly: checker.getIndexInfosOfType(normalizedType).some(info => info.isReadonly),
       keyType: "string",
       valueType: checker.typeToString(stringIndexType),
       valueTypeName: getNeedleTypeName(stringIndexType),
       valueConstructor: getNeedleConstructorTypeInfo(ts2, checker, stringIndexType),
+      valueOptions: getNeedleUnionTypeInfo(ts2, checker, stringIndexType, program, depth + 1, seen),
       valueMembers: getNeedleObjectMemberTypeInfo(ts2, checker, stringIndexType, program, depth + 1, seen)
     };
   }
@@ -268,14 +276,16 @@ function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, s
 }
 function getNeedleUnionTypeInfo(ts2, checker, type, program, depth = 0, seen = new Set()) {
   if (depth > 6 || !type.isUnion()) return void 0;
-  const parts = type.types.filter(part => (part.flags & (ts2.TypeFlags.Null | ts2.TypeFlags.Undefined | ts2.TypeFlags.Void)) === 0);
-  if (parts.length < 2) return void 0;
-  return parts.map(part => ({
+  let parts = type.types.filter(part => (part.flags & (ts2.TypeFlags.Null | ts2.TypeFlags.Undefined | ts2.TypeFlags.Void)) === 0);
+  const boolean = parts.filter(part => (part.flags & ts2.TypeFlags.BooleanLiteral) !== 0);
+  if (boolean.length === 2) parts = parts.filter(part => (part.flags & ts2.TypeFlags.BooleanLiteral) === 0);
+  if (parts.length + (boolean.length === 2 ? 1 : 0) < 2) return void 0;
+  return [...(boolean.length === 2 ? [{name: 'boolean', type: 'boolean'}] : []), ...parts.map(part => ({
     name: checker.typeToString(part), type: checker.typeToString(part),
     container: getNeedleContainerTypeInfo(ts2, checker, part, program, depth + 1, seen),
     constructor: getNeedleConstructorTypeInfo(ts2, checker, part),
     objectMembers: getNeedleObjectMemberTypeInfo(ts2, checker, part, program, depth + 1, seen),
-  }));
+  }))];
 }
 function isNeedleDefaultLibraryType(type) {
   const symbol = type.getSymbol() ?? type.aliasSymbol;
