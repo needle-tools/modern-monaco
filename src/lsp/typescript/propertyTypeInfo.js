@@ -25,6 +25,7 @@ export function resolveNeedlePropertyTypeInfo(ts2, languageService, fileName, po
     optional: !!declaration && "questionToken" in declaration && !!declaration.questionToken,
     description: symbol ? ts2.displayPartsToString(symbol.getDocumentationComment(checker)) || void 0 : void 0,
     defaultValue: getNeedleDefaultValue(tags),
+    stringFormat: getNeedleStringFormat(tags),
     sourceUrl: declaration?.getSourceFile().fileName,
     enumOptions: getNeedleLiteralEnumOptions(ts2, checker, type, program, declaration),
     container: getNeedleContainerTypeInfo(ts2, checker, type, program),
@@ -59,6 +60,10 @@ function getNeedleOwningTypeName(ts2, declaration) {
 }
 function hasNeedleReadonlyModifier(ts2, declaration) {
   return ts2.canHaveModifiers(declaration) ? ts2.getModifiers(declaration)?.some((modifier) => modifier.kind === ts2.SyntaxKind.ReadonlyKeyword) ?? false : false;
+}
+function getNeedleStringFormat(tags) {
+  const text = tags.find(tag => tag.name === "format")?.text?.map(part => part.text).join("").trim();
+  return text === "url" ? "url" : void 0;
 }
 function getNeedleDefaultValue(tags) {
   const tag = tags.find((tag2) => tag2.name === "default" || tag2.name === "defaultValue");
@@ -263,6 +268,7 @@ function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, s
       readonly: hasNeedleReadonlyModifier(ts2, declaration),
       optional,
       omitWhenOptional: optional,
+      stringFormat: getNeedleStringFormat(symbol.getJsDocTags(checker)),
       description: ts2.displayPartsToString(symbol.getDocumentationComment(checker)) || void 0,
       enumOptions: getNeedleLiteralEnumOptions(ts2, checker, memberType, program, declaration),
       container: getNeedleContainerTypeInfo(ts2, checker, memberType, program, depth + 1, branchSeen),
@@ -276,7 +282,7 @@ function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, s
 }
 function getNeedleUnionTypeInfo(ts2, checker, type, program, depth = 0, seen = new Set()) {
   if (depth > 6 || !type.isUnion()) return void 0;
-  let parts = type.types.filter(part => (part.flags & (ts2.TypeFlags.Null | ts2.TypeFlags.Undefined | ts2.TypeFlags.Void)) === 0);
+  let parts = type.types;
   const boolean = parts.filter(part => (part.flags & ts2.TypeFlags.BooleanLiteral) !== 0);
   if (boolean.length === 2) parts = parts.filter(part => (part.flags & ts2.TypeFlags.BooleanLiteral) === 0);
   if (parts.length + (boolean.length === 2 ? 1 : 0) < 2) return void 0;

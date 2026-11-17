@@ -30,8 +30,9 @@ test('mixed and discriminated unions preserve every branch rather than a partial
     const program = ts.createProgram([file], options, host);
     const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name + '!'), {propertyName: name});
     const choice = query('choice');
-    assert.equal(choice.unionOptions.length, 2);
-    assert.deepEqual(choice.unionOptions.map(branch => branch.objectMembers.find(field => field.name === 'value').type).sort(), ['number', 'string']);
+    assert.equal(choice.unionOptions.length, 3);
+    assert.equal(choice.unionOptions.some(branch => branch.type === 'null'), true);
+    assert.deepEqual(choice.unionOptions.filter(branch => branch.type !== 'null').map(branch => branch.objectMembers.find(field => field.name === 'value').type).sort(), ['number', 'string']);
     assert.deepEqual(query('mixed').unionOptions.map(branch => branch.type).sort(), ['"auto"', 'number']);
     assert.equal(query('mixed').enumOptions, undefined);
 });
@@ -129,4 +130,35 @@ test('quoted property queries retain the original field type, docs and readonly 
         assert.equal(info.description, 'Quoted mode.');
         assert.deepEqual(info.enumOptions.map(option => option.value).sort(), ['solid', 'wire']);
     } finally {service.dispose();}
+});
+
+
+test('nullish union branches survive aliases, nested fields and collection entries', () => {
+    const source = 'type Maybe = {amount: number} | null | undefined; class Settings { value!: Maybe; values!: Maybe[]; nested!: {value: Maybe}; }';
+    const file = '/nullable-alias.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name + '!'), {propertyName: name});
+    const nullish = options => options.filter(branch => ['null', 'undefined'].includes(branch.type)).map(branch => branch.type).sort();
+    assert.deepEqual(nullish(query('value').unionOptions), ['null', 'undefined']);
+    assert.deepEqual(nullish(query('values').container.elementOptions), ['null', 'undefined']);
+    assert.deepEqual(nullish(query('nested').objectMembers.find(member => member.name === 'value').unionOptions), ['null', 'undefined']);
+});
+
+
+test('URL format hints survive direct and nested property type queries', () => {
+    const source = `class Link {
+/** @format url */
+endpoint = 'https://example.com'; }
+        class Example {
+/** @format url */
+website = 'https://example.com'; links!: Link[]; }`;
+    const file = '/url-hints.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name), {propertyName: name});
+    assert.equal(query('website').stringFormat, 'url');
+    assert.equal(query('links').container.elementMembers.find(member => member.name === 'endpoint').stringFormat, 'url');
 });
