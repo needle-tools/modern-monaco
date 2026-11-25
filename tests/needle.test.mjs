@@ -162,3 +162,23 @@ website = 'https://example.com'; links!: Link[]; }`;
     assert.equal(query('website').stringFormat, 'url');
     assert.equal(query('links').container.elementMembers.find(member => member.name === 'endpoint').stringFormat, 'url');
 });
+
+test('property metadata queries share one alias index per TypeScript program', () => {
+    const file = '/flags.ts';
+    const source = 'type Callback = (string & { tag: 1 }) | (string & { tag: 2 }); export class Flags { first!: Callback; second!: Callback; }';
+    for (let revision = 0; revision < 2; revision++) {
+        const options = {strict:true, noLib:true};
+        const host = ts.createCompilerHost(options);
+        host.readFile = name => name === file ? source : undefined;
+        const program = ts.createProgram([file], options, host);
+        program.getTypeChecker();
+        const getFiles = program.getSourceFiles.bind(program);
+        let scans = 0;
+        program.getSourceFiles = () => { scans++; return getFiles(); };
+        for (const name of ['first', 'second', 'first']) {
+            const result = resolveNeedlePropertyTypeInfo(ts, {getProgram:() => program}, file, source.indexOf(name), {propertyName:name});
+            assert.equal(result.type, 'Callback');
+        }
+        assert.equal(scans, 1);
+    }
+});

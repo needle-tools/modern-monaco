@@ -99,23 +99,29 @@ function getNeedleLiteralEnumOptionsFromAliasDeclaration(ts2, checker, type) {
   const options = getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, declaration.type);
   return options.length > 0 ? options : void 0;
 }
+const unionAliasesByProgram = new WeakMap();
+
 function getNeedleLiteralEnumOptionsFromProgramAlias(ts2, checker, program, typeName) {
-  if (!/^[A-Za-z_$][\w$]*$/.test(typeName)) return void 0;
-  for (const sourceFile of program.getSourceFiles()) {
-    let result;
-    const visit = (node) => {
-      if (result) return;
-      if (ts2.isTypeAliasDeclaration(node) && node.name.text === typeName && ts2.isUnionTypeNode(node.type)) {
-        const options = getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, node.type);
-        if (options.length > 0) result = options;
-        return;
+  if (!/^[A-Za-z_$][\w$]*$/.test(typeName) || typeName === "boolean") return void 0;
+  let aliases = unionAliasesByProgram.get(program);
+  if (!aliases) {
+    aliases = new Map();
+    const visit = node => {
+      if (ts2.isTypeAliasDeclaration(node) && ts2.isUnionTypeNode(node.type)) {
+        const name = node.name.text;
+        const declarations = aliases.get(name);
+        if (declarations) declarations.push(node.type);
+        else aliases.set(name, [node.type]);
       }
       ts2.forEachChild(node, visit);
     };
-    visit(sourceFile);
-    if (result) return result;
+    for (const file of program.getSourceFiles()) visit(file);
+    unionAliasesByProgram.set(program, aliases);
   }
-  return void 0;
+  for (const declaration of aliases.get(typeName) ?? []) {
+    const options = getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, declaration);
+    if (options.length) return options;
+  }
 }
 function getNeedleLiteralEnumOptionsFromTypeNode(ts2, checker, typeNode, seen = /* @__PURE__ */ new Set()) {
   if (ts2.isUnionTypeNode(typeNode)) {
