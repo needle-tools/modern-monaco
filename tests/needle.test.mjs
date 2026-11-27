@@ -5,6 +5,39 @@ import { transform } from 'esbuild';
 import ts from 'typescript';
 import { resolveNeedlePropertyTypeInfo } from '../src/lsp/typescript/propertyTypeInfo.js';
 
+test('property queries retain presentation annotations on nested array members', () => {
+    const source = `class Marker {
+        /**
+         * Physical width.
+         * @range 0.1 1
+         * @unit m
+         */
+        widthInMeters!: number;
+    }
+    class Tracking { trackedImages!: Marker[]; }`;
+    const file = '/tracking.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name + '!'), {propertyName: name});
+    const presentation = ({min, max, unit}) => ({min, max, unit});
+    const expected = {min: 0.1, max: 1, unit: 'm'};
+    assert.deepEqual(presentation(query('trackedImages').container.elementMembers.find(member => member.name === 'widthInMeters')), expected);
+    assert.deepEqual(presentation(query('widthInMeters')), expected);
+});
+
+test('optional event arguments expose all fields of an intersection type', () => {
+    const source = `type FitCameraOptions = { padding?: number };
+        type OrbitFitCameraOptions = FitCameraOptions & { immediate?: boolean };
+        declare const options: OrbitFitCameraOptions | undefined;`;
+    const file = '/fit-camera.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const info = resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf('options:'), {propertyName: 'options'});
+    assert.deepEqual(info.objectMembers?.map(member => member.name), ['padding', 'immediate']);
+});
+
 test('collection element unions and readonly membership survive type queries', () => {
     const source = 'class Settings { entries!: Map<string, {kind: "a"; amount: number} | {kind: "b"; text: string}>; locked!: ReadonlySet<string>; list!: readonly number[]; lockedRules!: Readonly<Record<string, number>>; flag!: boolean; mixedFlag!: boolean | boolean[]; }';
     const file = '/collections.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};

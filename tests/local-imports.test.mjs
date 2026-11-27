@@ -29,6 +29,27 @@ const mirror = (uri, source = 'export const value = 1;') => ({
 });
 const options = { allowJs: true, noLib: true, strict: true, module: 'esnext', moduleResolution: 'bundler' };
 
+test('installed declarations resolve through workspace text without opening editor models', async () => {
+    const Worker = await bundled;
+    const main = 'file:///project/main.ts';
+    const root = 'file:///needle-package-types/fixture/';
+    const files = new Map([
+        [root + 'index.d.ts', 'export type { FitOptions } from "./options.js";'],
+        [root + 'options.d.ts', 'export interface FitOptions { padding: number; }'],
+    ]);
+    const models = [mirror(main, 'import type { FitOptions } from "fixture"; export const options: FitOptions = { padding: "wrong" };')];
+    const reads = [];
+    const worker = new Worker({getMirrorModels: () => models, host: {
+        readFile: async uri => { reads.push(uri); return files.get(uri); },
+        openModel: async uri => { throw new Error('Unexpected editor model: ' + uri); },
+        refreshDiagnostics: async () => {},
+    }}, {fs: ['/project/main.ts', ...[...files.keys()].map(uri => new URL(uri).pathname)], compilerOptions: options,
+        types: {}, importMap: {$baseURL: 'file:///', imports: {}, scopes: {}}});
+    const result = await worker.validateNeedleProject([main], {fixture: root + 'index.d.ts'}, 1000);
+    assert.deepEqual(result.map(entry => entry.diagnostic.code), [2322]);
+    assert.deepEqual(reads, [...files.keys()]);
+});
+
 const hostSetup = build({
     entryPoints: [fileURLToPath(new URL(`../${artifact}/lsp/typescript/setup.${extension}`, import.meta.url))],
     bundle: true, write: false, platform: 'node', format: 'cjs',

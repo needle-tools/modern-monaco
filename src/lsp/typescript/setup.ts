@@ -129,6 +129,15 @@ async function createWorker(
     worker: getWorker(createData, workerFactory),
     keepIdleModels: true,
     host: {
+      readFile: async (uri: string): Promise<string | undefined> => {
+        if (!workspace) throw new Error("Workspace is undefined.");
+        try {
+          return await workspace.fs.readTextFile(uri);
+        } catch (error) {
+          if (isFsNotFoundError(error)) return undefined;
+          throw error;
+        }
+      },
       openModel: async (uri: string): Promise<boolean> => {
         if (!workspace) {
           throw new Error("Workspace is undefined.");

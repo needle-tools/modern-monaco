@@ -26,6 +26,7 @@ export function resolveNeedlePropertyTypeInfo(ts2, languageService, fileName, po
     description: symbol ? ts2.displayPartsToString(symbol.getDocumentationComment(checker)) || void 0 : void 0,
     defaultValue: getNeedleDefaultValue(tags),
     stringFormat: getNeedleStringFormat(tags),
+    ...getNeedlePresentation(tags, typeText),
     sourceUrl: declaration?.getSourceFile().fileName,
     enumOptions: getNeedleLiteralEnumOptions(ts2, checker, type, program, declaration),
     container: getNeedleContainerTypeInfo(ts2, checker, type, program),
@@ -64,6 +65,27 @@ function hasNeedleReadonlyModifier(ts2, declaration) {
 function getNeedleStringFormat(tags) {
   const text = tags.find(tag => tag.name === "format")?.text?.map(part => part.text).join("").trim();
   return text === "url" ? "url" : void 0;
+}
+function getNeedlePresentation(tags, type) {
+  const text = name => tags.find(tag => tag.name === name)?.text?.map(part => part.text).join("").trim();
+  const presentation = {};
+  if (/(?:^|\s\|\s)string(?:$|\s\|\s)/.test(type)) {
+    const accept = text("accept");
+    if (accept && accept.split(",").every(value => /^[\w.+-]+\/(?:[\w.+-]+|\*)$/.test(value.trim()))) presentation.accept = accept;
+  }
+  if (/(?:^|\s\|\s)number(?:$|\s\|\s)/.test(type)) {
+    const unit = text("unit");
+    if (unit && unit.length <= 16 && !/[\r\n]/.test(unit)) presentation.unit = unit;
+    const range = text("range")?.split(/\s+/);
+    if (range?.length === 2) {
+      const [min, max] = range.map(Number);
+      if (Number.isFinite(min) && Number.isFinite(max) && min < max) {
+        presentation.min = min;
+        presentation.max = max;
+      }
+    }
+  }
+  return presentation;
 }
 function getNeedleDefaultValue(tags) {
   const tag = tags.find((tag2) => tag2.name === "default" || tag2.name === "defaultValue");
@@ -238,7 +260,8 @@ function getNeedleContainerTypeInfo(ts2, checker, type, program, depth = 0, seen
 function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, seen = /* @__PURE__ */ new Set()) {
   if (depth > 6) return void 0;
   const normalizedType = getNeedleNonNullishType(ts2, type);
-  if ((normalizedType.getFlags() & ts2.TypeFlags.Object) === 0) return void 0;
+  const objectFlags = ts2.TypeFlags.Object | ts2.TypeFlags.Intersection;
+  if ((normalizedType.getFlags() & objectFlags) === 0) return void 0;
   if (checker.isArrayType(normalizedType) || checker.isTupleType(normalizedType)) return void 0;
   const symbolName = getNeedleTypeSymbolName(normalizedType);
   if (symbolName === "Map" || symbolName === "ReadonlyMap" || symbolName === "Set" || symbolName === "ReadonlySet") return void 0;
@@ -268,13 +291,15 @@ function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, s
     const checkedTypeText = checker.typeToString(declaredMemberType);
     const declaredTypeText = "type" in declaration ? declaration.type?.getText() : void 0;
     const typeText = checkedTypeText === "any" && declaredTypeText && declaredTypeText !== "any" ? declaredTypeText : checkedTypeText;
+    const tags = symbol.getJsDocTags(checker);
     return {
       name,
       type: typeText,
       readonly: hasNeedleReadonlyModifier(ts2, declaration),
       optional,
       omitWhenOptional: optional,
-      stringFormat: getNeedleStringFormat(symbol.getJsDocTags(checker)),
+      stringFormat: getNeedleStringFormat(tags),
+      ...getNeedlePresentation(tags, typeText),
       description: ts2.displayPartsToString(symbol.getDocumentationComment(checker)) || void 0,
       enumOptions: getNeedleLiteralEnumOptions(ts2, checker, memberType, program, declaration),
       container: getNeedleContainerTypeInfo(ts2, checker, memberType, program, depth + 1, branchSeen),

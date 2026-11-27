@@ -25,6 +25,7 @@ import { initializeWorker } from "../../editor-worker.js";
 
 export interface Host {
   openModel(uri: string): Promise<boolean>;
+  readFile(uri: string): Promise<string | undefined>;
   refreshDiagnostics(uri: string): Promise<void>;
 }
 
@@ -66,6 +67,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
   #httpLibs = new Map<string, string>();
   #httpModules = new Map<string, string>();
   #httpTsModules = new Map<string, string>();
+  #packageDeclarations = new Map<string, string>();
   #redirectedImports: [modelUrl: string, node: ts.Node, url: string][] = [];
   #unknownImports = new Set<string>();
   #badImports = new Set<string>();
@@ -136,6 +138,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
       || this.#httpLibs.has(filename)
       || this.#httpModules.has(filename)
       || this.#httpTsModules.has(filename)
+      || this.#packageDeclarations.has(filename)
       || this.hasModel(filename)
     );
   }
@@ -174,6 +177,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
   }
 
   getScriptVersion(fileName: string): string {
+    if (this.#packageDeclarations.has(fileName)) return String(this.#importMapVersion);
     if (fileName in this.#types) {
       return String(this.#types[fileName].version);
     }
@@ -290,6 +294,23 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
         if (local) moduleUrl = new URL(local.resolvedFileName, moduleUrl);
         const moduleHref = moduleUrl.href;
         if (this.#badImports.has(moduleHref)) {
+          return undefined;
+        }
+        // Installed package declaration paths are content-addressed and immutable.
+        if (moduleUrl.pathname.startsWith("/needle-package-types/") && /\.d\.(?:ts|mts|cts)$/.test(moduleUrl.pathname)) {
+          if (this.#packageDeclarations.has(moduleHref)) {
+            return { resolvedFileName: moduleHref, extension: getScriptExtension(moduleUrl.pathname)! };
+          }
+          if (this.hasFileSystemProvider && !this.#openPromises.has(moduleHref)) {
+            this.#openPromises.set(moduleHref, this.host.readFile(moduleHref).then(text => {
+              if (text === undefined) this.#badImports.add(moduleHref);
+              else this.#packageDeclarations.set(moduleHref, text);
+              this.#importMapVersion++;
+            }).finally(() => {
+              this.#openPromises.delete(moduleHref);
+              this.host.refreshDiagnostics(containingFile);
+            }));
+          }
           return undefined;
         }
         for (const model of this.getMirrorModels()) {
@@ -1260,6 +1281,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
       ?? this.#httpLibs.get(fileName)
       ?? this.#httpModules.get(fileName)
       ?? this.#httpTsModules.get(fileName)
+      ?? this.#packageDeclarations.get(fileName)
       ?? this.getModel(fileName)?.getValue();
   }
 
@@ -1268,7 +1290,7 @@ export class TypeScriptWorker extends WorkerBase<Host> implements ts.LanguageSer
     if (doc) {
       return doc;
     }
-    if (uri.startsWith("http://") || uri.startsWith("https://")) {
+    if (uri.startsWith("http://") || uri.startsWith("https://") || this.#packageDeclarations.has(uri)) {
       const docCache = this.#httpDocumentCache;
       if (docCache.has(uri)) {
         return docCache.get(uri)!;
