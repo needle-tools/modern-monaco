@@ -266,7 +266,8 @@ function getNeedleObjectMemberTypeInfo(ts2, checker, type, program, depth = 0, s
   const symbolName = getNeedleTypeSymbolName(normalizedType);
   if (symbolName === "Map" || symbolName === "ReadonlyMap" || symbolName === "Set" || symbolName === "ReadonlySet") return void 0;
   if (normalizedType.getStringIndexType()) return void 0;
-  if (isNeedleDefaultLibraryType(normalizedType)) return void 0;
+  if (isNeedleDefaultLibraryType(normalizedType)
+    && !(normalizedType.objectFlags & ts2.ObjectFlags.Mapped)) return void 0;
   const typeKey = checker.typeToString(normalizedType);
   if (seen.has(typeKey)) return void 0;
   const branchSeen = new Set(seen);

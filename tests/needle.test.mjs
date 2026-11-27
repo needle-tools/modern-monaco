@@ -38,6 +38,17 @@ test('optional event arguments expose all fields of an intersection type', () =>
     assert.deepEqual(info.objectMembers?.map(member => member.name), ['padding', 'immediate']);
 });
 
+test('Partial<T> exposes optional fields for Inspector creation', () => {
+    const source = `interface VectorLike { x: number; y: number; z: number }
+        declare const offset: Partial<VectorLike> | undefined;`;
+    const file = '/partial.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
+    const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
+    host.readFile = name => name === file ? source : read(name);
+    const program = ts.createProgram([file], options, host);
+    const info = resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf('offset:'), {propertyName: 'offset'});
+    assert.deepEqual(info.objectMembers?.map(({name, optional}) => [name, optional]), [['x', true], ['y', true], ['z', true]]);
+});
+
 test('collection element unions and readonly membership survive type queries', () => {
     const source = 'class Settings { entries!: Map<string, {kind: "a"; amount: number} | {kind: "b"; text: string}>; locked!: ReadonlySet<string>; list!: readonly number[]; lockedRules!: Readonly<Record<string, number>>; flag!: boolean; mixedFlag!: boolean | boolean[]; }';
     const file = '/collections.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
