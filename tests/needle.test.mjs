@@ -50,13 +50,14 @@ test('Partial<T> exposes optional fields for Inspector creation', () => {
 });
 
 test('collection element unions and readonly membership survive type queries', () => {
-    const source = 'class Settings { entries!: Map<string, {kind: "a"; amount: number} | {kind: "b"; text: string}>; locked!: ReadonlySet<string>; list!: readonly number[]; lockedRules!: Readonly<Record<string, number>>; flag!: boolean; mixedFlag!: boolean | boolean[]; }';
+    const source = 'class Settings { entries!: Map<{model: string}, {kind: "a"; amount: number} | {kind: "b"; text: string}>; locked!: ReadonlySet<string>; list!: readonly number[]; lockedRules!: Readonly<Record<string, number>>; flag!: boolean; mixedFlag!: boolean | boolean[]; }';
     const file = '/collections.ts', options = {strict: true, target: ts.ScriptTarget.ES2022};
     const host = ts.createCompilerHost(options), read = host.readFile.bind(host);
     host.readFile = name => name === file ? source : read(name);
     const program = ts.createProgram([file], options, host);
     const query = name => resolveNeedlePropertyTypeInfo(ts, {getProgram: () => program}, file, source.indexOf(name + '!'), {propertyName: name});
     assert.equal(query('entries').container.valueOptions.length, 2);
+    assert.deepEqual(query('entries').container.keyMembers.map(({name, type}) => [name, type]), [['model', 'string']]);
     assert.equal(query('locked').container.readonly, true);
     assert.equal(query('list').container.kind, 'array');
     assert.equal(query('list').container.readonly, true);

@@ -235,6 +235,8 @@ function getNeedleContainerTypeInfo(ts2, checker, type, program, depth = 0, seen
       kind: "map",
       readonly: symbolName === "ReadonlyMap",
       keyType: typeArguments[0] ? checker.typeToString(typeArguments[0]) : void 0,
+      keyMembers: typeArguments[0] ? getNeedleObjectMemberTypeInfo(ts2, checker, typeArguments[0], program, depth + 1, seen) : void 0,
+      keyConstructor: typeArguments[0] ? getNeedleConstructorTypeInfo(ts2, checker, typeArguments[0]) : void 0,
       valueType: checker.typeToString(valueType),
       valueTypeName: getNeedleTypeName(valueType),
       valueConstructor: getNeedleConstructorTypeInfo(ts2, checker, valueType),
